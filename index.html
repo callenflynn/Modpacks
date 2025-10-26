@@ -6,14 +6,19 @@
   <title>Cal's Modpacks</title>
   <style>
     body{font-family:Arial,Helvetica,sans-serif;max-width:900px;margin:28px auto;padding:0 16px;color:#111}
+    body.dark{background:#222;color:#eee}
     h1{font-size:22px;margin:0 0 8px}
     input{padding:6px;margin:8px 6px 8px 0}
     button{padding:6px}
     table{width:100%;border-collapse:collapse;margin-top:8px}
     th,td{border:1px solid #ddd;padding:8px;text-align:left}
+    body.dark th, body.dark td{border-color:#555}
     th{background:#f7f7f7}
+    body.dark th{background:#444}
     .muted{color:#666;font-size:13px}
+    body.dark .muted{color:#aaa}
     .error{color:#a00}
+    body.dark .error{color:#f88}
   </style>
 </head>
 <body>
@@ -22,6 +27,7 @@
   <div style="margin-top:10px">
     <input id="search" placeholder="Search release tags" aria-label="search">
     <button id="refresh">Refresh</button>
+    <button id="darkModeToggle">Toggle Dark Mode</button>
   </div>
   <div id="status" class="muted">Loading…</div>
   <table id="table" aria-live="polite">
@@ -36,12 +42,18 @@
     const repo = 'Modpacks';
     const search = document.getElementById('search');
     const refresh = document.getElementById('refresh');
+    const darkModeToggle = document.getElementById('darkModeToggle');
     const status = document.getElementById('status');
     const tbody = document.querySelector('#table tbody');
     let releases = [];
 
     refresh.addEventListener('click', load);
     search.addEventListener('input', renderFiltered);
+    darkModeToggle.addEventListener('click', toggleDarkMode);
+
+    if (localStorage.getItem('darkMode') === 'true') {
+      document.body.classList.add('dark');
+    }
 
     async function load(){
       status.textContent = 'Loading releases…';
@@ -97,6 +109,11 @@
         const tdLink = document.createElement('td'); const a = document.createElement('a'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = 'Release'; tdLink.appendChild(a); tr.appendChild(tdLink);
         tbody.appendChild(tr);
       }
+    }
+
+    function toggleDarkMode(){
+      document.body.classList.toggle('dark');
+      localStorage.setItem('darkMode', document.body.classList.contains('dark'));
     }
 
     load().catch(err => { status.innerHTML = '<span class="error">Error: ' + (err && err.message || err) + '</span>'; });
