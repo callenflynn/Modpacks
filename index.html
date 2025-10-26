@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width,initial-scale=1" />
+	<title>Cal's Modpacks</title>
+	<style>
+		:root{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;line-height:1.4;color:#111}
+		body{max-width:980px;margin:28px auto;padding:0 18px}
+		header{display:flex;align-items:baseline;gap:12px}
+		h1{margin:0;font-size:28px}
+		.muted{color:#555;font-size:14px}
+		.controls{margin-top:12px;display:flex;gap:8px;align-items:center}
+		input[type=text]{padding:8px;border:1px solid #ddd;border-radius:6px}
+		button{padding:8px 12px;border-radius:6px;border:1px solid #1976d2;background:#1e88e5;color:white;cursor:pointer}
+		button[disabled]{opacity:.6;cursor:default}
+		.notice{margin:14px 0;padding:12px;border-radius:8px;background:#f2f7ff;border:1px solid #dbeeff}
+		.grid{display:grid;grid-template-columns:1fr;gap:14px;margin-top:18px}
+		.pack{border:1px solid #eee;padding:12px;border-radius:8px}
+		.pack h2{margin:0 0 6px 0;font-size:18px}
+		.meta{color:#666;font-size:13px;margin-bottom:8px}
+		ul{margin:0;padding-left:20px}
+		a.version{display:inline-block;padding:6px 8px;border-radius:6px;border:1px solid #eee;margin:6px 6px 0 0;text-decoration:none;color:#0b66c3}
+		.loading{font-style:italic;color:#444}
+		footer{margin-top:28px;color:#666;font-size:13px}
+		.error{color:#a00}
+	</style>
+</head>
+<body>
+	<header>
+		<h1>Cal's Modpacks</h1>
+		<div class="muted">— downloads and release listing</div>
+	</header>
+
+	<p class="muted">This page automatically scans GitHub releases for this repository and groups them by modpack. It links each release and shows published dates.</p>
+
+	<div class="controls">
+		<label class="muted">Repository:</label>
+		<input id="repoInput" type="text" value="callenflynn/Modpacks" aria-label="owner/repo" />
+		<button id="refreshBtn">Refresh</button>
+		<div id="spinner" class="muted" style="margin-left:8px"></div>
+	</div>
+
+	<div id="status" class="notice" style="display:none"></div>
+
+	<main>
+		<div id="packs" class="grid"></div>
+	</main>
+
+	<footer>
+		<div>Powered by GitHub Releases API. If you hit rate limits, add a personal access token in the browser console as <code>window.GH_TOKEN = 'ghp_...'</code> and click Refresh.</div>
+	</footer>
+
+	<script>
+		const repoInput = document.getElementById('repoInput');
+		const refreshBtn = document.getElementById('refreshBtn');
+		const packsEl = document.getElementById('packs');
+		const statusEl = document.getElementById('status');
+		const spinner = document.getElementById('spinner');
+
+		refreshBtn.addEventListener('click', () => loadFor(repoInput.value.trim()));
+		repoInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadFor(repoInput.value.trim()); });
+
+		loadFor(repoInput.value.trim());
+
+		function setLoading(msg){ spinner.textContent = msg || ''; }
+		function showStatus(msg, isError){ statusEl.style.display = 'block'; statusEl.textContent = msg; statusEl.className = isError ? 'notice error' : 'notice'; }
+		function clearStatus(){ statusEl.style.display = 'none'; statusEl.textContent = ''; }
+
+		async function loadFor(ownerRepo){
+			if (!ownerRepo || !ownerRepo.includes('/')){ showStatus('Please enter owner/repo (for example: callenflynn/Modpacks)', true); return; }
+			clearStatus(); packsEl.innerHTML = ''; setLoading('Loading...'); refreshBtn.disabled = true;
+			try{
+				const [owner, repo] = ownerRepo.split('/');
+				const releases = await fetchAllReleases(owner, repo);
+				if (!releases.length){ showStatus('No releases found for ' + ownerRepo); }
+				const grouped = groupReleases(releases);
+				renderGroups(grouped, owner, repo);
+			}catch(err){
+				console.error(err);
+				showStatus('Error: ' + (err.message || err), true);
+			} finally { setLoading(''); refreshBtn.disabled = false; }
+		}
+
+		async function fetchAllReleases(owner, repo){
+			const token = window.GH_TOKEN || null; 
+			const headers = { 'Accept': 'application/vnd.github.v3+json' };
+			if (token) headers['Authorization'] = 'token ' + token;
+			let page = 1; const per_page = 100; let out = [];
+			while(true){
+				setLoading(`Loading page ${page}...`);
+				const url = `https://api.github.com/repos/${owner}/${repo}/releases?per_page=${per_page}&page=${page}`;
+				const res = await fetch(url, { headers });
+				if (res.status === 403){
+					const rl = res.headers.get('X-RateLimit-Remaining');
+					if (rl === '0') throw new Error('GitHub API rate limit exceeded. Try adding a token: window.GH_TOKEN = "ghp_..." and refresh.');
+				}
+				if (!res.ok) throw new Error(`GitHub API returned ${res.status} ${res.statusText}`);
+				const pageItems = await res.json();
+				if (!Array.isArray(pageItems)) throw new Error('Unexpected API response');
+				out = out.concat(pageItems);
+				const link = res.headers.get('link') || '';
+				const hasNext = link && link.includes('rel="next"');
+				if (!hasNext) break;
+				page += 1;
+			}
+			return out.map(r => ({
+				id: r.id,
+				tag_name: r.tag_name || r.name || '',
+				name: r.name || r.tag_name || '',
+				html_url: r.html_url,
+				published_at: r.published_at || r.created_at || null
+			}));
+		}
+
+		function groupReleases(releases){
+			const groups = new Map();
+			for(const r of releases){
+				const key = inferModpackKey(r.tag_name, r.name);
+				if (!groups.has(key)) groups.set(key, []);
+				groups.get(key).push(r);
+			}
+			for(const [k, arr] of groups){
+				arr.sort((a,b) => { const A = a.published_at||''; const B = b.published_at||''; return (B.localeCompare(A)); });
+			}
+			return groups;
+		}
+
+		function inferModpackKey(tag, name){
+			const t = (tag || '').trim();
+			const n = (name || '').trim();
+			let m = t.match(/^(.+?)[-_]v?\d+(?:\.\d+)*(.*)$/i);
+			if (m) return normalizePackName(m[1]);
+			m = t.match(/^(.+?)-(?=\d)/);
+			if (m) return normalizePackName(m[1]);
+			if (n){ const tok = n.split(/\s+/)[0]; if (tok) return normalizePackName(tok); }
+			return normalizePackName(t || 'unknown');
+		}
+
+		function normalizePackName(s){
+			return s.toLowerCase().replace(/^the[-_]?/,'').replace(/[-_]+/g,' ').trim();
+		}
+
+		function formatDate(iso){ if (!iso) return 'unknown'; try{ return new Date(iso).toLocaleString(); }catch(e){ return iso; } }
+
+		function renderGroups(groups, owner, repo){
+			packsEl.innerHTML = '';
+			const arr = Array.from(groups.entries()).map(([k, v]) => ({ key:k, releases:v, last: v[0] && v[0].published_at }));
+			arr.sort((a,b)=> (b.last || '').localeCompare(a.last || ''));
+			for(const g of arr){
+				const container = document.createElement('section'); container.className = 'pack';
+				const title = document.createElement('h2'); title.textContent = prettyTitle(g.key);
+				container.appendChild(title);
+				const meta = document.createElement('div'); meta.className = 'meta';
+				meta.textContent = `Latest: ${g.releases[0].tag_name} — Published ${formatDate(g.releases[0].published_at)}`;
+				container.appendChild(meta);
+
+				const list = document.createElement('div');
+				for(const rel of g.releases){
+					const a = document.createElement('a');
+					a.className = 'version';
+					a.href = rel.html_url;
+					a.target = '_blank';
+					a.rel = 'noopener noreferrer';
+					a.textContent = `${rel.tag_name} • ${formatDate(rel.published_at)}`;
+					list.appendChild(a);
+				}
+				container.appendChild(list);
+
+				packsEl.appendChild(container);
+			}
+			if (arr.length === 0){ packsEl.innerHTML = '<div class="muted">No releases found.</div>'; }
+		}
+
+		function prettyTitle(key){
+			return key.split(' ').map(w => w[0]?.toUpperCase() + w.slice(1)).join(' ');
+		}
+	</script>
+</body>
+</html>
+
